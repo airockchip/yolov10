@@ -79,6 +79,13 @@ trtexec --onnx=yolov10n/s/m/b/l/x.onnx --saveEngine=yolov10n/s/m/b/l/x.engine --
 yolo predict model=yolov10n/s/m/b/l/x.engine
 ```
 
+## RKNN Deployment
+Regarding the deployment of RKNN and the export of ONNX models, convert RKNN model and demo, please refer:
+
+[RKNN_README_CN.md](RKNN_README_CN.md)
+
+[RKNN_README_EN.md](RKNN_README_EN.md)
+
 ## Acknowledgement
 
 The code base is built with [ultralytics](https://github.com/ultralytics/ultralytics) and [RT-DETR](https://github.com/lyuwenyu/RT-DETR).

@@ -76,6 +76,12 @@ class Detect(nn.Module):
             y.append(torch.cat((cv2[i](x[i]), cv3[i](x[i])), 1))
         return y
 
+    def forward_feat_rknn(self, x, cv2, cv3):
+        y = []
+        for i in range(self.nl):
+            y.append([cv2[i](x[i]), cv3[i](x[i]).sigmoid()])
+        return y
+
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         y = self.forward_feat(x, self.cv2, self.cv3)
@@ -509,6 +515,10 @@ class v10Detect(Detect):
         self.one2one_cv3 = copy.deepcopy(self.cv3)
     
     def forward(self, x):
+        if self.export and self.format == 'rknn':
+            one2one = self.forward_feat_rknn([xi.detach() for xi in x], self.one2one_cv2, self.one2one_cv3)
+            return one2one
+
         one2one = self.forward_feat([xi.detach() for xi in x], self.one2one_cv2, self.one2one_cv3)
         if not self.export:
             one2many = super().forward(x)

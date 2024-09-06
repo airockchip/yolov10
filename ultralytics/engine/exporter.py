@@ -108,6 +108,7 @@ def export_formats():
         ["TensorFlow.js", "tfjs", "_web_model", True, False],
         ["PaddlePaddle", "paddle", "_paddle_model", True, True],
         ["NCNN", "ncnn", "_ncnn_model", True, True],
+        ["RKNN", "rknn", "_rknn.onnx", True, False],
     ]
     return pandas.DataFrame(x, columns=["Format", "Argument", "Suffix", "CPU", "GPU"])
 
@@ -179,7 +180,7 @@ class Exporter:
         flags = [x == fmt for x in fmts]
         if sum(flags) != 1:
             raise ValueError(f"Invalid export format='{fmt}'. Valid formats are {fmts}")
-        jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle, ncnn = flags  # export booleans
+        jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle, ncnn, rknn = flags  # export booleans
 
         # Device
         if fmt == "engine" and self.args.device is None:
@@ -307,6 +308,8 @@ class Exporter:
             f[10], _ = self.export_paddle()
         if ncnn:  # NCNN
             f[11], _ = self.export_ncnn()
+        if rknn:  # RKNN
+            f[12], _ = self.export_rknn()
 
         # Finish
         f = [str(x) for x in f if x]  # filter out '' and None
@@ -322,13 +325,20 @@ class Exporter:
             imgsz = self.imgsz[0] if square else str(self.imgsz)[1:-1].replace(" ", "")
             predict_data = f"data={data}" if model.task == "segment" and fmt == "pb" else ""
             q = "int8" if self.args.int8 else "half" if self.args.half else ""  # quantization
-            LOGGER.info(
-                f'\nExport complete ({time.time() - t:.1f}s)'
-                f"\nResults saved to {colorstr('bold', file.parent.resolve())}"
-                f'\nPredict:         yolo predict task={model.task} model={f} imgsz={imgsz} {q} {predict_data}'
-                f'\nValidate:        yolo val task={model.task} model={f} imgsz={imgsz} data={data} {q} {s}'
-                f'\nVisualize:       https://netron.app'
-            )
+            if rknn:
+                LOGGER.info(
+                    f'\nExport complete ({time.time() - t:.1f}s)'
+                    f"\nResults saved to {colorstr('bold', file.parent.resolve())}"
+                    f'\nVisualize:       https://netron.app'
+                )
+            else:
+                LOGGER.info(
+                    f'\nExport complete ({time.time() - t:.1f}s)'
+                    f"\nResults saved to {colorstr('bold', file.parent.resolve())}"
+                    f'\nPredict:         yolo predict task={model.task} model={f} imgsz={imgsz} {q} {predict_data}'
+                    f'\nValidate:        yolo val task={model.task} model={f} imgsz={imgsz} data={data} {q} {s}'
+                    f'\nVisualize:       https://netron.app'
+                )
 
         self.run_callbacks("on_export_end")
         return f  # return list of exported files/dirs
@@ -409,6 +419,57 @@ class Exporter:
             meta.key, meta.value = k, str(v)
 
         onnx.save(model_onnx, f)
+        return f, model_onnx
+
+    @try_export
+    def export_rknn(self, prefix=colorstr("RKNN:")):
+        """YOLOv8 ONNX export."""
+        requirements = ["onnx>=1.12.0"]
+        if self.args.simplify:
+            requirements += ["onnxsim>=0.4.33", "onnxruntime-gpu" if torch.cuda.is_available() else "onnxruntime"]
+            if ARM64:
+                check_requirements("cmake")  # 'cmake' is needed to build onnxsim on aarch64
+        check_requirements(requirements)
+        import onnx  # noqa
+
+        opset_version = self.args.opset or get_latest_opset()
+        LOGGER.info(f"\n{prefix} starting export with onnx {onnx.__version__} opset {opset_version}...")
+        f = str(self.file.with_suffix(".onnx"))
+
+        torch.onnx.export(
+            self.model.cpu(),
+            self.im.cpu(),
+            f,
+            verbose=False,
+            opset_version=opset_version,
+            do_constant_folding=True,  # WARNING: DNN inference with torch>=1.12 may require do_constant_folding=False
+            input_names=["images"],
+        )
+
+        # Checks
+        model_onnx = onnx.load(f)  # load onnx model
+        # onnx.checker.check_model(model_onnx)  # check onnx model
+
+        # Simplify
+        if self.args.simplify:
+            try:
+                import onnxsim
+
+                LOGGER.info(f"{prefix} simplifying with onnxsim {onnxsim.__version__}...")
+                # subprocess.run(f'onnxsim "{f}" "{f}"', shell=True)
+                model_onnx, check = onnxsim.simplify(model_onnx)
+                assert check, "Simplified ONNX model could not be validated"
+            except Exception as e:
+                LOGGER.info(f"{prefix} simplifier failure: {e}")
+
+        # Metadata
+        for k, v in self.metadata.items():
+            meta = model_onnx.metadata_props.add()
+            meta.key, meta.value = k, str(v)
+
+        onnx.save(model_onnx, f)
+
+        LOGGER.info(f"\n{prefix} convert {f} to RKNN model using RKNN-Toolkit2, please refer to https://github.com/airockchip/rknn_model_zoo")
         return f, model_onnx
 
     @try_export
